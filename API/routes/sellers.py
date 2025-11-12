@@ -1,14 +1,17 @@
 """
-Маршруты для работы с продавцами (sellers)
+Маршруты для работы с продавцами с кэшированием
 """
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 import logging
+from pydantic import BaseModel, EmailStr
 
 from database.connection import DatabaseConnection
 from database.models import Supplier
 from database.odt import SupplierODT, ODTConverter
+from cache import cached, invalidate_cache, cache
+from background_tasks import send_statistics_email
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +19,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sallers", tags=["sallers"])
 
 
+# Модель для запроса статистики
+class StatisticsRequest(BaseModel):
+    email: EmailStr
+
+
 # Зависимость для получения сессии БД
 def get_db():
     db = DatabaseConnection()
     if not db.is_connected:
-        # Подключаемся к БД если еще не подключены
         db.connect("sqlite:///woysa_database.db")
 
     session = db.get_session()
@@ -31,19 +38,17 @@ def get_db():
 
 
 @router.get("/", response_model=List[Dict[str, Any]])
+@cached(ttl=60)  # Кэшируем на 1 минуту
 async def get_all_sallers(db: Session = Depends(get_db)):
     """
-    Получение всех продавцов
-    Соответствует требованию 01.A - /sallers
+    Получение всех продавцов с кэшированием
     """
-    logger.info("📋 Получение всех продавцов")
+    logger.info("📋 Получение всех продавцов (с кэшированием)")
 
     try:
-        # Получаем всех продавцов из базы
         sellers = db.query(Supplier).all()
-
-        # Преобразуем в ODT и затем в словарь
         sellers_data = []
+
         for seller in sellers:
             seller_odt = ODTConverter.supplier_to_odt(seller)
             sellers_data.append(seller_odt.to_dict())
@@ -57,25 +62,20 @@ async def get_all_sallers(db: Session = Depends(get_db)):
 
 
 @router.get("/{seller_id}/", response_model=Dict[str, Any])
+@cached(ttl=120)  # Кэшируем на 2 минуты
 async def get_saller_by_id(seller_id: int, db: Session = Depends(get_db)):
     """
-    Получение продавца по ID
-    Соответствует требованию 01.C - /sallers/{id}/
+    Получение продавца по ID с кэшированием
     """
-    logger.info(f"🔍 Получение продавца с ID: {seller_id}")
+    logger.info(f"🔍 Получение продавца с ID: {seller_id} (с кэшированием)")
 
     try:
-        # Ищем продавца в базе
         seller = db.query(Supplier).filter(Supplier.id == seller_id).first()
 
         if not seller:
-            logger.warning(f"❌ Продавец с ID {seller_id} не найден")
             raise HTTPException(status_code=404, detail="Продавец не найден")
 
-        # Преобразуем в ODT и затем в словарь
         seller_odt = ODTConverter.supplier_to_odt(seller)
-
-        logger.info(f"✅ Продавец с ID {seller_id} найден: {seller.name}")
         return seller_odt.to_dict()
 
     except HTTPException:
@@ -86,40 +86,31 @@ async def get_saller_by_id(seller_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/{seller_id}/update", response_model=Dict[str, Any])
+@invalidate_cache(pattern="cache:*")  # Очищаем кэш при обновлении
 async def update_saller(seller_id: int, update_data: dict, db: Session = Depends(get_db)):
     """
-    Обновление продавца по ID
-    Соответствует требованию 01.B - /sallers/{id}/update
+    Обновление продавца по ID с инвалидацией кэша
     """
     logger.info(f"🔄 Обновление продавца с ID: {seller_id}")
 
     try:
-        # Ищем продавца в базе
         seller = db.query(Supplier).filter(Supplier.id == seller_id).first()
 
         if not seller:
-            logger.warning(f"❌ Продавец с ID {seller_id} не найден")
             raise HTTPException(status_code=404, detail="Продавец не найден")
 
-        # Разрешенные поля для обновления
         allowed_fields = ['name', 'contact_person', 'email', 'phone', 'address', 'is_active']
-
-        # Обновляем только разрешенные поля
         updated_fields = []
+
         for field, value in update_data.items():
             if field in allowed_fields and hasattr(seller, field):
                 setattr(seller, field, value)
                 updated_fields.append(field)
 
-        # Сохраняем изменения
         db.commit()
-
-        # Обновляем объект для получения актуальных данных
         db.refresh(seller)
 
-        # Преобразуем в ODT и затем в словарь
         seller_odt = ODTConverter.supplier_to_odt(seller)
-
         logger.info(f"✅ Продавец с ID {seller_id} обновлен. Измененные поля: {updated_fields}")
         return seller_odt.to_dict()
 
@@ -129,3 +120,55 @@ async def update_saller(seller_id: int, update_data: dict, db: Session = Depends
         db.rollback()
         logger.error(f"❌ Ошибка обновления продавца: {e}")
         raise HTTPException(status_code=500, detail="Ошибка обновления данных")
+
+
+@router.post("/statistics/")
+async def request_statistics(
+        request: StatisticsRequest,
+        background_tasks: BackgroundTasks,
+        db: Session = Depends(get_db)
+):
+    """
+    Запрос статистики с отправкой на email
+    Соответствует требованию 02
+    """
+    logger.info(f"📊 Запрос статистики для email: {request.email}")
+
+    try:
+        # Запускаем фоновую задачу
+        task = send_statistics_email.delay(request.email)
+
+        return {
+            "status": "success",
+            "message": f"Запрос на генерацию отчета принят. Отчет будет отправлен на {request.email}",
+            "task_id": task.id
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Ошибка запроса статистики: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка обработки запроса")
+
+
+@router.get("/cache/status/")
+async def get_cache_status():
+    """
+    Получение статуса кэша
+    """
+    return {
+        "redis_connected": cache.is_connected(),
+        "cache_keys": len(cache.redis_client.keys("cache:*")) if cache.is_connected() else 0
+    }
+
+
+@router.delete("/cache/clear/")
+async def clear_cache():
+    """
+    Очистка кэша
+    """
+    try:
+        if cache.clear_pattern("cache:*"):
+            return {"status": "success", "message": "Кэш очищен"}
+        else:
+            raise HTTPException(status_code=500, detail="Ошибка очистки кэша")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка очистки кэша: {e}")
