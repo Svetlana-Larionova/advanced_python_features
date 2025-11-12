@@ -5,10 +5,15 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="538ffe82-17c5-448b-963c-307c598c8b3a" name="Changes" comment="наследование">
-      <change afterPath="$PROJECT_DIR$/database/odt.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/API/init.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/API/main.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/API/routes/init.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/API/routes/sellers.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/test_api.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/database/models.py" beforeDir="false" afterPath="$PROJECT_DIR$/database/models.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/woysa_database.db" beforeDir="false" afterPath="$PROJECT_DIR$/woysa_database.db" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
