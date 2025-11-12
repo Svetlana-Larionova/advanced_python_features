@@ -1,7 +1,7 @@
 """
-Модели таблиц базы данных
+Модели таблиц базы данных с зависимостями
 """
-from sqlalchemy import Column, String, Text, Numeric, Integer, ForeignKey, Boolean
+from sqlalchemy import Column, String, Text, Numeric, Integer, ForeignKey, Boolean, DateTime
 from sqlalchemy.orm import relationship
 from .base import BaseTable, Base
 import logging
@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 class Supplier(BaseTable):
     """
     Модель таблицы поставщиков
-    Соответствует требованию 03.B
     """
     __tablename__ = "suppliers"
 
@@ -23,8 +22,8 @@ class Supplier(BaseTable):
     address = Column(Text)
     is_active = Column(Boolean, default=True)
 
-    # Связь с товарами
-    products = relationship("Product", back_populates="supplier")
+    # Связь с товарами (01.A - товары зависят от поставщика)
+    products = relationship("Product", back_populates="supplier", cascade="all, delete-orphan")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -34,7 +33,6 @@ class Supplier(BaseTable):
 class Product(BaseTable):
     """
     Модель таблицы товаров
-    Соответствует требованию 03.C
     """
     __tablename__ = "products"
 
@@ -44,12 +42,13 @@ class Product(BaseTable):
     quantity = Column(Integer, default=0)
     category = Column(String(100))
     sku = Column(String(100), unique=True, index=True)
-    supplier_id = Column(Integer, ForeignKey('suppliers.id'), nullable=False)
+    supplier_id = Column(Integer, ForeignKey('suppliers.id', ondelete="CASCADE"), nullable=False)
     is_available = Column(Boolean, default=True)
 
-    # Связи
+    # Связи (01.A - товары зависят от поставщика)
     supplier = relationship("Supplier", back_populates="products")
-    order_items = relationship("OrderItem", back_populates="product")
+    # 01.B - заказы зависят от товаров (через OrderItem)
+    order_items = relationship("OrderItem", back_populates="product", cascade="all, delete-orphan")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -59,7 +58,6 @@ class Product(BaseTable):
 class Order(BaseTable):
     """
     Модель таблицы заказов
-    Соответствует требованию 03.A
     """
     __tablename__ = "orders"
 
@@ -70,12 +68,16 @@ class Order(BaseTable):
     status = Column(String(50), default="pending")  # pending, completed, cancelled
     shipping_address = Column(Text)
 
-    # Связь с элементами заказа
+    # 01.B - заказы зависят от товаров (через OrderItem)
     order_items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         logger.info(f"Создан новый заказ для: {self.customer_name}")
+
+    def calculate_total(self):
+        """Пересчет общей суммы заказа"""
+        self.total_amount = sum(item.quantity * item.unit_price for item in self.order_items)
 
 
 class OrderItem(BaseTable):
@@ -84,8 +86,8 @@ class OrderItem(BaseTable):
     """
     __tablename__ = "order_items"
 
-    order_id = Column(Integer, ForeignKey('orders.id'), nullable=False)
-    product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
+    order_id = Column(Integer, ForeignKey('orders.id', ondelete="CASCADE"), nullable=False)
+    product_id = Column(Integer, ForeignKey('products.id', ondelete="CASCADE"), nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
     unit_price = Column(Numeric(10, 2), nullable=False)
 
