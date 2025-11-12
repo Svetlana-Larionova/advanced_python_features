@@ -1,6 +1,6 @@
 """
 Расширенные возможности Python
-Асинхронное программирование, многопоточность, пакетная обработка
+Параллельное программирование: ThreadPoolExecutor, пакетная обработка, асинхронность
 """
 
 import asyncio
@@ -83,8 +83,59 @@ class AdvancedWoysaLoader(BaseModel):
 
         return results
 
+    def download_data_threadpool_map(self, categories: List[int]) -> Dict[str, Any]:
+        """
+        Многопоточная загрузка с использованием ThreadPoolExecutor и метода map
+        Соответствует требованию К1
+        """
+        logger.info(f"🎯 Многопоточная загрузка (ThreadPoolExecutor map) {len(categories)} категорий")
+        results = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.batch_config.max_workers) as executor:
+            # Используем метод map как требуется в задании
+            category_results = list(executor.map(self._download_single_category_sync, categories))
+
+            for i, category in enumerate(categories):
+                if isinstance(category_results[i], Exception):
+                    logger.error(f"❌ Ошибка категории {category}: {category_results[i]}")
+                    results[str(category)] = {"error": str(category_results[i])}
+                else:
+                    results[str(category)] = category_results[i]
+                    logger.info(f"✅ Загружена категория {category}")
+
+        return results
+
+    def download_data_batched_threadpool(self, categories: List[int]) -> Dict[str, Any]:
+        """
+        Пакетная обработка с ThreadPoolExecutor и np.array_split
+        Соответствует требованию К2
+        """
+        logger.info(f"📦 Пакетная обработка с ThreadPoolExecutor {len(categories)} категорий")
+
+        if not categories:
+            return {}
+
+        # Разделяем категории на пакеты с использованием np.array_split
+        batches = np.array_split(categories, max(1, len(categories) // self.batch_config.batch_size))
+        logger.info(f"📊 Создано {len(batches)} пакетов с помощью np.array_split")
+
+        all_results = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.batch_config.max_workers) as executor:
+            # Используем метод map для обработки пакетов
+            batch_results = list(executor.map(self._process_batch, batches))
+
+            for i, batch_result in enumerate(batch_results):
+                all_results.update(batch_result)
+                logger.info(f"✅ Обработан пакет {i + 1}/{len(batches)}")
+
+        return all_results
+
     async def download_data_async(self, categories: List[int]) -> Tuple[Dict[str, Any], float]:
-        """Асинхронная загрузка данных с возвратом времени выполнения"""
+        """
+        Асинхронное получение данных
+        Соответствует требованию К3
+        """
         logger.info(f"⚡ Асинхронная загрузка {len(categories)} категорий")
         start_time = time.time()
         results = {}
@@ -138,28 +189,6 @@ class AdvancedWoysaLoader(BaseModel):
             logger.error(f"❌ Асинхронная ошибка категории {category}: {e}")
             return {"error": str(e)}
 
-    def download_data_threaded(self, categories: List[int]) -> Dict[str, Any]:
-        """Многопоточная загрузка данных"""
-        logger.info(f"🎯 Многопоточная загрузка {len(categories)} категорий")
-        results = {}
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.batch_config.max_workers) as executor:
-            future_to_category = {
-                executor.submit(self._download_single_category_sync, category): category
-                for category in categories
-            }
-
-            for future in concurrent.futures.as_completed(future_to_category):
-                category = future_to_category[future]
-                try:
-                    results[str(category)] = future.result()
-                    logger.info(f"✅ Потоковая загрузка категории {category}")
-                except Exception as e:
-                    logger.error(f"❌ Ошибка потока категории {category}: {e}")
-                    results[str(category)] = {"error": str(e)}
-
-        return results
-
     def _download_single_category_sync(self, category: int) -> Any:
         """Синхронная загрузка одной категории для многопоточности"""
         try:
@@ -177,37 +206,7 @@ class AdvancedWoysaLoader(BaseModel):
                 }
 
         except Exception as e:
-            raise e
-
-    def download_data_batched(self, categories: List[int]) -> Dict[str, Any]:
-        """Пакетная обработка данных с использованием numpy"""
-        logger.info(f"📦 Пакетная обработка {len(categories)} категорий")
-
-        if not categories:
-            return {}
-
-        # Разделяем категории на пакеты
-        batches = np.array_split(categories, max(1, len(categories) // self.batch_config.batch_size))
-        logger.info(f"📊 Создано {len(batches)} пакетов")
-
-        all_results = {}
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.batch_config.max_workers) as executor:
-            future_to_batch = {
-                executor.submit(self._process_batch, batch): i
-                for i, batch in enumerate(batches)
-            }
-
-            for future in concurrent.futures.as_completed(future_to_batch):
-                batch_num = future_to_batch[future]
-                try:
-                    batch_results = future.result()
-                    all_results.update(batch_results)
-                    logger.info(f"✅ Обработан пакет {batch_num + 1}/{len(batches)}")
-                except Exception as e:
-                    logger.error(f"❌ Ошибка пакета {batch_num}: {e}")
-
-        return all_results
+            return e  # Возвращаем исключение для обработки в map
 
     def _process_batch(self, batch: np.ndarray) -> Dict[str, Any]:
         """Обработка одного пакета категорий"""
@@ -297,61 +296,54 @@ class PerformanceBenchmark:
 
 async def main():
     print("=" * 60)
-    print("🚀 ПРОДВИНУТЫЙ PYTHON: Асинхронное программирование")
+    print("🚀 ПАРАЛЛЕЛЬНОЕ ПРОГРАММИРОВАНИЕ: ThreadPoolExecutor, пакетная обработка")
     print("=" * 60)
 
     loader = AdvancedWoysaLoader()
     benchmark = PerformanceBenchmark()
 
-    # Тестовые категории (меньше для теста)
+    # Тестовые категории
     test_categories = [100, 200, 300, 400, 500]
 
     print(f"📋 Тестовые категории: {test_categories}")
     print()
 
-    # Синхронная загрузка
-    print("1. 🔄 СИНХРОННАЯ ЗАГРУЗКА:")
-    sync_data, sync_time = benchmark.measure_time(loader.download_data, test_categories)
-    print(f"   ⏱️ Время: {sync_time:.2f} сек")
-    print(f"   📊 Результаты: {len(sync_data)} категорий")
-
-    # Многопоточная загрузка
-    print("\n2. 🎯 МНОГОПОТОЧНАЯ ЗАГРУЗКА:")
-    threaded_data, threaded_time = benchmark.measure_time(
-        loader.download_data_threaded, test_categories
+    # 1. ThreadPoolExecutor с методом map (К1)
+    print("1. 🎯 THREADPOOLEXECUTOR С MAP (К1):")
+    threadpool_data, threadpool_time = benchmark.measure_time(
+        loader.download_data_threadpool_map, test_categories
     )
-    print(f"   ⏱️ Время: {threaded_time:.2f} сек")
-    print(f"   📊 Результаты: {len(threaded_data)} категорий")
+    print(f"   ⏱️ Время: {threadpool_time:.2f} сек")
+    print(f"   📊 Результаты: {len(threadpool_data)} категорий")
 
-    # Пакетная обработка
-    print("\n3. 📦 ПАКЕТНАЯ ОБРАБОТКА:")
+    # 2. Пакетная обработка с np.array_split (К2)
+    print("\n2. 📦 ПАКЕТНАЯ ОБРАБОТКА С ARRAY_SPLIT (К2):")
     batched_data, batched_time = benchmark.measure_time(
-        loader.download_data_batched, test_categories
+        loader.download_data_batched_threadpool, test_categories
     )
     print(f"   ⏱️ Время: {batched_time:.2f} сек")
     print(f"   📊 Результаты: {len(batched_data)} категорий")
 
-    # Асинхронная загрузка
-    print("\n4. ⚡ АСИНХРОННАЯ ЗАГРУЗКА:")
+    # 3. Асинхронная загрузка (К3)
+    print("\n3. ⚡ АСИНХРОННАЯ ЗАГРУЗКА (К3):")
     async_data, async_time = await loader.download_data_async(test_categories)
     print(f"   ⏱️ Время: {async_time:.2f} сек")
     print(f"   📊 Результаты: {len(async_data)} категорий")
 
     # Преобразование данных
-    print("\n5. 🔄 ПРЕОБРАЗОВАНИЕ ДАННЫХ:")
+    print("\n4. 🔄 ПРЕОБРАЗОВАНИЕ ДАННЫХ:")
     transformed = loader.transform_to_dict(async_data)
     print(f"   📈 Статистика: {transformed['statistics']}")
 
     print("\n" + "=" * 60)
     print("🎯 СРАВНЕНИЕ ПРОИЗВОДИТЕЛЬНОСТИ:")
-    print(f"   Синхронная:    {sync_time:.2f} сек")
-    print(f"   Многопоточная: {threaded_time:.2f} сек")
-    print(f"   Пакетная:      {batched_time:.2f} сек")
-    print(f"   Асинхронная:   {async_time:.2f} сек")
+    print(f"   ThreadPoolExecutor map: {threadpool_time:.2f} сек")
+    print(f"   Пакетная обработка:     {batched_time:.2f} сек")
+    print(f"   Асинхронная:           {async_time:.2f} сек")
 
     # Показываем примеры ответов
     print("\n📋 ПРИМЕРЫ ОТВЕТОВ:")
-    for category in test_categories[:2]:  # Показываем первые 2 категории
+    for category in test_categories[:2]:
         data = async_data.get(str(category), {})
         if isinstance(data, dict) and "error" in data:
             status = "❌ Ошибка"
@@ -363,8 +355,6 @@ async def main():
         if "content_type" in data:
             print(f"      Content-Type: {data.get('content_type')}")
             print(f"      Preview: {data.get('text_preview')}")
-        if "error" in data:
-            print(f"      Error: {data.get('error')}")
 
 
 if __name__ == "__main__":
