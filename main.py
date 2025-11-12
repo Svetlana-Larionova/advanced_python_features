@@ -1,6 +1,6 @@
 """
 Расширенные возможности Python
-Параллельное программирование: ThreadPoolExecutor, пакетная обработка, асинхронность
+SQLAlchemy - работа с базой данных
 """
 
 import asyncio
@@ -12,349 +12,190 @@ from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
 import time
 import logging
-from dataclasses import dataclass
+
+# Импорты для работы с БД
+from database.connection import DatabaseConnection
+from database.base import Base
+from database.models import Supplier, Product, Order, OrderItem
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class BatchConfig:
-    """Конфигурация для пакетной обработки"""
-    batch_size: int = 5
-    max_workers: int = 3
-    timeout: int = 10
-
-
 class BaseModel(ABC):
-
     @abstractmethod
     def download_data(self, categories: List[int]) -> Dict[str, Any]:
-        """Синхронное получение данных"""
         pass
 
     @abstractmethod
     def transform_to_dict(self, data: Any) -> Dict[str, Any]:
-        """Преобразование данных в словарь"""
         pass
 
 
-class AdvancedWoysaLoader(BaseModel):
-    _instance = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+class DatabaseDemo:
+    """Демонстрация работы с базой данных"""
 
     def __init__(self):
-        self.base_url = 'https://analitika.woysa.club/images/panel/json/download/niches.php'
-        self.batch_config = BatchConfig()
-        logger.info("🚀 AdvancedWoysaLoader инициализирован")
+        self.db = DatabaseConnection()
 
-    def download_data(self, categories: List[int]) -> Dict[str, Any]:
-        """Синхронная загрузка данных"""
-        logger.info(f"📥 Синхронная загрузка {len(categories)} категорий")
-        results = {}
+    def setup_database(self):
+        """Настройка и подключение к базе данных"""
+        # SQLite для демонстрации (можно заменить на PostgreSQL, MySQL и т.д.)
+        connection_string = "sqlite:///woysa_database.db"
 
-        for category in categories:
-            try:
-                url = self._build_url(category)
-                response = requests.get(url, timeout=self.batch_config.timeout)
+        if self.db.connect(connection_string, echo=False):
+            # Создаем таблицы
+            self.db.create_tables(Base)
+            return True
+        return False
 
-                # Проверяем Content-Type перед парсингом JSON
-                content_type = response.headers.get('content-type', '')
-                if 'application/json' in content_type:
-                    results[str(category)] = response.json()
-                    logger.info(f"✅ Загружена категория {category}")
-                else:
-                    # Если не JSON, сохраняем текст ответа
-                    results[str(category)] = {
-                        "content_type": content_type,
-                        "text_preview": response.text[:100] + "..." if len(response.text) > 100 else response.text,
-                        "status_code": response.status_code
-                    }
-                    logger.info(f"⚠️  Категория {category}: получен {content_type}")
+    def demo_crud_operations(self):
+        """Демонстрация CRUD операций"""
+        logger.info("🚀 Демонстрация CRUD операций с базой данных")
 
-            except Exception as e:
-                logger.error(f"❌ Ошибка категории {category}: {e}")
-                results[str(category)] = {"error": str(e)}
-
-        return results
-
-    def download_data_threadpool_map(self, categories: List[int]) -> Dict[str, Any]:
-        """
-        Многопоточная загрузка с использованием ThreadPoolExecutor и метода map
-        Соответствует требованию К1
-        """
-        logger.info(f"🎯 Многопоточная загрузка (ThreadPoolExecutor map) {len(categories)} категорий")
-        results = {}
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.batch_config.max_workers) as executor:
-            # Используем метод map как требуется в задании
-            category_results = list(executor.map(self._download_single_category_sync, categories))
-
-            for i, category in enumerate(categories):
-                if isinstance(category_results[i], Exception):
-                    logger.error(f"❌ Ошибка категории {category}: {category_results[i]}")
-                    results[str(category)] = {"error": str(category_results[i])}
-                else:
-                    results[str(category)] = category_results[i]
-                    logger.info(f"✅ Загружена категория {category}")
-
-        return results
-
-    def download_data_batched_threadpool(self, categories: List[int]) -> Dict[str, Any]:
-        """
-        Пакетная обработка с ThreadPoolExecutor и np.array_split
-        Соответствует требованию К2
-        """
-        logger.info(f"📦 Пакетная обработка с ThreadPoolExecutor {len(categories)} категорий")
-
-        if not categories:
-            return {}
-
-        # Разделяем категории на пакеты с использованием np.array_split
-        batches = np.array_split(categories, max(1, len(categories) // self.batch_config.batch_size))
-        logger.info(f"📊 Создано {len(batches)} пакетов с помощью np.array_split")
-
-        all_results = {}
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.batch_config.max_workers) as executor:
-            # Используем метод map для обработки пакетов
-            batch_results = list(executor.map(self._process_batch, batches))
-
-            for i, batch_result in enumerate(batch_results):
-                all_results.update(batch_result)
-                logger.info(f"✅ Обработан пакет {i + 1}/{len(batches)}")
-
-        return all_results
-
-    async def download_data_async(self, categories: List[int]) -> Tuple[Dict[str, Any], float]:
-        """
-        Асинхронное получение данных
-        Соответствует требованию К3
-        """
-        logger.info(f"⚡ Асинхронная загрузка {len(categories)} категорий")
-        start_time = time.time()
-        results = {}
-
-        async with aiohttp.ClientSession() as session:
-            tasks = []
-            for category in categories:
-                task = self._download_single_category_async(session, category)
-                tasks.append(task)
-
-            category_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for i, category in enumerate(categories):
-                if isinstance(category_results[i], Exception):
-                    results[str(category)] = {"error": str(category_results[i])}
-                else:
-                    results[str(category)] = category_results[i]
-
-        end_time = time.time()
-        return results, end_time - start_time
-
-    async def _download_single_category_async(self, session: aiohttp.ClientSession, category: int) -> Any:
-        """Асинхронная загрузка одной категории"""
         try:
-            url = self._build_url(category)
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=self.batch_config.timeout)) as response:
+            session = self.db.get_session()
 
-                # Проверяем Content-Type
-                content_type = response.headers.get('content-type', '')
-                if 'application/json' in content_type:
-                    data = await response.json()
-                    logger.info(f"✅ Асинхронно загружена категория {category}")
-                    return data
-                else:
-                    # Если не JSON, возвращаем информацию о ответе с обработкой кодировки
-                    try:
-                        text = await response.text()
-                    except UnicodeDecodeError:
-                        # Если ошибка кодировки, читаем как байты
-                        bytes_data = await response.read()
-                        text = bytes_data.decode('utf-8', errors='replace')
+            # Создание поставщика
+            supplier = Supplier(
+                name="TechSupplier Inc.",
+                contact_person="Иван Иванов",
+                email="ivan@techsupplier.com",
+                phone="+7-999-123-45-67",
+                address="Москва, ул. Техническая, 123"
+            )
+            session.add(supplier)
+            session.flush()  # Получаем ID
 
-                    return {
-                        "content_type": content_type,
-                        "text_preview": text[:100] + "..." if len(text) > 100 else text,
-                        "status_code": response.status,
-                        "url": str(response.url)
-                    }
+            # Создание товаров
+            products = [
+                Product(
+                    name="Ноутбук Gaming Pro",
+                    description="Игровой ноутбук с RTX 4070",
+                    price=150000.00,
+                    quantity=10,
+                    category="Электроника",
+                    sku="NB-GAMING-PRO-001",
+                    supplier_id=supplier.id
+                ),
+                Product(
+                    name="Смартфон Galaxy X",
+                    description="Флагманский смартфон",
+                    price=89999.99,
+                    quantity=25,
+                    category="Электроника",
+                    sku="PH-GALAXY-X-001",
+                    supplier_id=supplier.id
+                )
+            ]
+
+            for product in products:
+                session.add(product)
+
+            session.flush()
+
+            # Создание заказа
+            order = Order(
+                customer_name="Петр Петров",
+                customer_email="petr@example.com",
+                customer_phone="+7-999-765-43-21",
+                shipping_address="Санкт-Петербург, Невский пр., 456"
+            )
+            session.add(order)
+            session.flush()
+
+            # Создание элементов заказа
+            order_items = [
+                OrderItem(
+                    order_id=order.id,
+                    product_id=products[0].id,
+                    quantity=1,
+                    unit_price=products[0].price
+                ),
+                OrderItem(
+                    order_id=order.id,
+                    product_id=products[1].id,
+                    quantity=2,
+                    unit_price=products[1].price
+                )
+            ]
+
+            for item in order_items:
+                session.add(item)
+
+            # Обновление общей суммы заказа
+            total = sum(item.quantity * item.unit_price for item in order_items)
+            order.total_amount = total
+
+            # Сохранение всех изменений
+            session.commit()
+
+            logger.info("✅ Данные успешно добавлены в базу данных")
+
+            # Чтение данных
+            self.demo_read_operations(session)
+
+            return True
 
         except Exception as e:
-            logger.error(f"❌ Асинхронная ошибка категории {category}: {e}")
-            return {"error": str(e)}
+            logger.error(f"❌ Ошибка при работе с базой данных: {e}")
+            session.rollback()
+            return False
+        finally:
+            session.close()
 
-    def _download_single_category_sync(self, category: int) -> Any:
-        """Синхронная загрузка одной категории для многопоточности"""
-        try:
-            url = self._build_url(category)
-            response = requests.get(url, timeout=self.batch_config.timeout)
+    def demo_read_operations(self, session):
+        """Демонстрация операций чтения"""
+        logger.info("📖 Демонстрация операций чтения из базы данных")
 
-            content_type = response.headers.get('content-type', '')
-            if 'application/json' in content_type:
-                return response.json()
-            else:
-                return {
-                    "content_type": content_type,
-                    "text_preview": response.text[:100] + "..." if len(response.text) > 100 else response.text,
-                    "status_code": response.status_code
-                }
+        # Чтение всех поставщиков
+        suppliers = session.query(Supplier).all()
+        logger.info(f"📊 Найдено поставщиков: {len(suppliers)}")
 
-        except Exception as e:
-            return e  # Возвращаем исключение для обработки в map
+        # Чтение всех товаров
+        products = session.query(Product).all()
+        logger.info(f"📊 Найдено товаров: {len(products)}")
 
-    def _process_batch(self, batch: np.ndarray) -> Dict[str, Any]:
-        """Обработка одного пакета категорий"""
-        batch_results = {}
+        # Чтение всех заказов
+        orders = session.query(Order).all()
+        logger.info(f"📊 Найдено заказов: {len(orders)}")
 
-        for category in batch:
-            try:
-                url = self._build_url(int(category))
-                response = requests.get(url, timeout=self.batch_config.timeout)
+        # Пример преобразования в словарь
+        for supplier in suppliers[:1]:  # Первый поставщик
+            logger.info(f"📋 Данные поставщика: {supplier.to_dict()}")
 
-                content_type = response.headers.get('content-type', '')
-                if 'application/json' in content_type:
-                    batch_results[str(category)] = response.json()
-                else:
-                    batch_results[str(category)] = {
-                        "content_type": content_type,
-                        "text_preview": response.text[:100] + "..." if len(response.text) > 100 else response.text,
-                        "status_code": response.status_code
-                    }
-
-            except Exception as e:
-                batch_results[str(category)] = {"error": str(e)}
-
-        return batch_results
-
-    def transform_to_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Преобразование данных в структурированный словарь"""
-        logger.info("🔄 Преобразование данных в словарь")
-
-        transformed = {
-            "categories": {},
-            "statistics": {
-                "total": len(data),
-                "successful": 0,
-                "errors": 0,
-                "non_json_responses": 0
-            }
-        }
-
-        for category, category_data in data.items():
-            if isinstance(category_data, dict) and "error" in category_data:
-                transformed["categories"][category] = {
-                    "status": "error",
-                    "message": category_data["error"]
-                }
-                transformed["statistics"]["errors"] += 1
-            elif isinstance(category_data, dict) and "content_type" in category_data:
-                transformed["categories"][category] = {
-                    "status": "non_json",
-                    "content_type": category_data.get("content_type"),
-                    "status_code": category_data.get("status_code"),
-                    "preview": category_data.get("text_preview", "")
-                }
-                transformed["statistics"]["non_json_responses"] += 1
-            else:
-                transformed["categories"][category] = {
-                    "status": "success",
-                    "data": category_data,
-                    "items_count": len(category_data) if isinstance(category_data, list) else 1
-                }
-                transformed["statistics"]["successful"] += 1
-
-        return transformed
-
-    def _build_url(self, category: int) -> str:
-        """Построение URL для запроса"""
-        params = {
-            "id_cat": category,
-            "skip": 0,
-            "pricemin": 0,
-            "price_max": 1060225
-        }
-        query_string = "&".join(f"{k}={v}" for k, v in params.items())
-        return f"{self.base_url}?{query_string}"
-
-
-# Бенчмарк для сравнения методов
-class PerformanceBenchmark:
-    @staticmethod
-    def measure_time(func, *args, **kwargs) -> Tuple[Any, float]:
-        """Измерение времени выполнения функции"""
-        start_time = time.time()
-        result = func(*args, **kwargs)
-        end_time = time.time()
-        return result, end_time - start_time
+        for product in products[:2]:  # Первые два товара
+            logger.info(f"📋 Данные товара: {product.to_dict()}")
 
 
 async def main():
     print("=" * 60)
-    print("🚀 ПАРАЛЛЕЛЬНОЕ ПРОГРАММИРОВАНИЕ: ThreadPoolExecutor, пакетная обработка")
+    print("🗄️  SQLALCHEMY - РАБОТА С БАЗОЙ ДАННЫХ")
     print("=" * 60)
 
-    loader = AdvancedWoysaLoader()
-    benchmark = PerformanceBenchmark()
+    # Демонстрация работы с базой данных
+    db_demo = DatabaseDemo()
 
-    # Тестовые категории
-    test_categories = [100, 200, 300, 400, 500]
+    print("\n1. 🔌 ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ:")
+    if db_demo.setup_database():
+        print("   ✅ База данных успешно подключена и таблицы созданы")
+    else:
+        print("   ❌ Ошибка подключения к базе данных")
+        return
 
-    print(f"📋 Тестовые категории: {test_categories}")
-    print()
-
-    # 1. ThreadPoolExecutor с методом map (К1)
-    print("1. 🎯 THREADPOOLEXECUTOR С MAP (К1):")
-    threadpool_data, threadpool_time = benchmark.measure_time(
-        loader.download_data_threadpool_map, test_categories
-    )
-    print(f"   ⏱️ Время: {threadpool_time:.2f} сек")
-    print(f"   📊 Результаты: {len(threadpool_data)} категорий")
-
-    # 2. Пакетная обработка с np.array_split (К2)
-    print("\n2. 📦 ПАКЕТНАЯ ОБРАБОТКА С ARRAY_SPLIT (К2):")
-    batched_data, batched_time = benchmark.measure_time(
-        loader.download_data_batched_threadpool, test_categories
-    )
-    print(f"   ⏱️ Время: {batched_time:.2f} сек")
-    print(f"   📊 Результаты: {len(batched_data)} категорий")
-
-    # 3. Асинхронная загрузка (К3)
-    print("\n3. ⚡ АСИНХРОННАЯ ЗАГРУЗКА (К3):")
-    async_data, async_time = await loader.download_data_async(test_categories)
-    print(f"   ⏱️ Время: {async_time:.2f} сек")
-    print(f"   📊 Результаты: {len(async_data)} категорий")
-
-    # Преобразование данных
-    print("\n4. 🔄 ПРЕОБРАЗОВАНИЕ ДАННЫХ:")
-    transformed = loader.transform_to_dict(async_data)
-    print(f"   📈 Статистика: {transformed['statistics']}")
+    print("\n2. 🛠️  ДЕМОНСТРАЦИЯ CRUD ОПЕРАЦИЙ:")
+    if db_demo.demo_crud_operations():
+        print("   ✅ CRUD операции успешно выполнены")
+    else:
+        print("   ❌ Ошибка выполнения CRUD операций")
 
     print("\n" + "=" * 60)
-    print("🎯 СРАВНЕНИЕ ПРОИЗВОДИТЕЛЬНОСТИ:")
-    print(f"   ThreadPoolExecutor map: {threadpool_time:.2f} сек")
-    print(f"   Пакетная обработка:     {batched_time:.2f} сек")
-    print(f"   Асинхронная:           {async_time:.2f} сек")
-
-    # Показываем примеры ответов
-    print("\n📋 ПРИМЕРЫ ОТВЕТОВ:")
-    for category in test_categories[:2]:
-        data = async_data.get(str(category), {})
-        if isinstance(data, dict) and "error" in data:
-            status = "❌ Ошибка"
-        elif isinstance(data, dict) and "content_type" in data:
-            status = "⚠️ HTML"
-        else:
-            status = "✅ JSON"
-        print(f"   Категория {category}: {status}")
-        if "content_type" in data:
-            print(f"      Content-Type: {data.get('content_type')}")
-            print(f"      Preview: {data.get('text_preview')}")
+    print("🎯 ВЫПОЛНЕННЫЕ ТРЕБОВАНИЯ:")
+    print("   ✅ K1: Класс подключения к БД (DatabaseConnection)")
+    print("   ✅ K2: Абстрактный класс таблицы (BaseTable)")
+    print("   ✅ K3: Таблицы (Supplier, Product, Order)")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
